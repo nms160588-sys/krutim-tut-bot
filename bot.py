@@ -1,4 +1,4 @@
-from flask import Flask, request
+from flask import Flask, request, jsonify
 import requests
 import os
 from dotenv import load_dotenv
@@ -27,47 +27,64 @@ ANSWERS = {
 }
 
 def send_msg(chat_id, text):
-    requests.post(
-        f"https://api.telegram.org/bot{TOKEN}/sendMessage",
-        json={"chat_id": chat_id, "text": text},
-        timeout=10
-    )
+    try:
+        requests.post(
+            f"https://api.telegram.org/bot{TOKEN}/sendMessage",
+            json={"chat_id": chat_id, "text": text}
+        )
+        print(f"[OK] Отправлено {chat_id}")
+    except Exception as e:
+        print(f"[ERROR] {e}")
 
 def answer(text):
     text_low = text.lower()
     for key, resp in ANSWERS.items():
         if key and key in text_low:
+            print(f"[ANSWER] Найден ключ: {key}")
             return resp
+    print(f"[ANSWER] Возвращаю default")
     return ANSWERS[""]
 
+@app.route("/", methods=["GET"])
+def get():
+    return "OK", 200
+
 @app.route("/", methods=["POST"])
-def handle_update():
-    data = request.json
+def webhook():
+    try:
+        data = request.get_json()
+        print(f"[UPDATE] {data}")
 
-    if "message" not in data:
-        return "ok"
+        if not data or "message" not in data:
+            print("[SKIP] Нет message в data")
+            return "ok", 200
 
-    msg = data["message"]
-    chat_id = msg.get("chat", {}).get("id")
-    text = msg.get("text", "")
+        msg = data["message"]
+        chat_id = msg.get("chat", {}).get("id")
+        text = msg.get("text", "")
 
-    if not chat_id or not text:
-        return "ok"
+        if not chat_id or not text:
+            print(f"[SKIP] chat_id={chat_id}, text={text}")
+            return "ok", 200
 
-    print(f"Got: {chat_id}: {text}")
+        print(f"[MSG] {chat_id}: {text}")
 
-    if text.startswith("/start"):
-        send_msg(chat_id, "Привет! Я помогу тебе запустить точку Крутим Тут. Спрашивай про инвестиции, открытие, команду, зарплату, локацию, выручку, маркетинг и другое.")
-    else:
-        resp = answer(text)
-        send_msg(chat_id, resp)
+        if text.startswith("/start"):
+            send_msg(chat_id, "Привет! Я помогу тебе запустить точку Крутим Тут. Спрашивай про инвестиции, открытие, команду, зарплату, локацию, выручку, маркетинг и другое.")
+        else:
+            resp = answer(text)
+            send_msg(chat_id, resp)
 
-    return "ok"
+        return "ok", 200
+
+    except Exception as e:
+        print(f"[ERROR] {e}")
+        return "error", 500
 
 @app.route("/health", methods=["GET"])
 def health():
-    return "OK"
+    return "OK", 200
 
 if __name__ == "__main__":
-    print("Bot started (webhook)")
-    app.run(host="0.0.0.0", port=PORT)
+    print(f"Starting bot on port {PORT}")
+    app.run(host="0.0.0.0", port=PORT, debug=False)
