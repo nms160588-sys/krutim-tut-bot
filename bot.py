@@ -1,15 +1,18 @@
+from flask import Flask, request
 import requests
-import time
 import os
 from dotenv import load_dotenv
 
 load_dotenv()
 
 TOKEN = os.getenv("TELEGRAM_TOKEN")
+PORT = int(os.getenv("PORT", 5000))
 
 if not TOKEN:
     print("ERROR: No TELEGRAM_TOKEN")
     exit(1)
+
+app = Flask(__name__)
 
 ANSWERS = {
     "инвест": "300-500 тысяч на старте. Помещение, ремонт, оборудование, товары. Окупаешься за 3-4 месяца если хорошая локация.",
@@ -24,26 +27,11 @@ ANSWERS = {
 }
 
 def send_msg(chat_id, text):
-    try:
-        requests.post(
-            f"https://api.telegram.org/bot{TOKEN}/sendMessage",
-            json={"chat_id": chat_id, "text": text},
-            timeout=10
-        )
-        print(f"[Sent] {chat_id}")
-    except Exception as e:
-        print(f"[Error] {e}")
-
-def get_updates(offset=None):
-    try:
-        params = {"timeout": 20}
-        if offset:
-            params["offset"] = offset
-        r = requests.get(f"https://api.telegram.org/bot{TOKEN}/getUpdates", params=params, timeout=25)
-        return r.json()
-    except Exception as e:
-        print(f"[Error] {e}")
-        return {}
+    requests.post(
+        f"https://api.telegram.org/bot{TOKEN}/sendMessage",
+        json={"chat_id": chat_id, "text": text},
+        timeout=10
+    )
 
 def answer(text):
     text_low = text.lower()
@@ -52,38 +40,34 @@ def answer(text):
             return resp
     return ANSWERS[""]
 
-def main():
-    print("Bot started")
-    offset = None
-    while True:
-        try:
-            data = get_updates(offset)
-            if not data.get("ok"):
-                time.sleep(3)
-                continue
+@app.route("/", methods=["POST"])
+def handle_update():
+    data = request.json
 
-            for upd in data.get("result", []):
-                offset = upd["update_id"] + 1
-                msg = upd.get("message", {})
-                chat_id = msg.get("chat", {}).get("id")
-                text = msg.get("text", "")
+    if "message" not in data:
+        return "ok"
 
-                if not chat_id or not text:
-                    continue
+    msg = data["message"]
+    chat_id = msg.get("chat", {}).get("id")
+    text = msg.get("text", "")
 
-                print(f"[Got] {chat_id}: {text}")
+    if not chat_id or not text:
+        return "ok"
 
-                if text.startswith("/start"):
-                    send_msg(chat_id, "Привет! Я помогу тебе запустить точку Крутим Тут. Спрашивай про инвестиции, открытие, команду, зарплату, локацию, выручку, маркетинг и другое.")
-                else:
-                    resp = answer(text)
-                    send_msg(chat_id, resp)
+    print(f"Got: {chat_id}: {text}")
 
-        except KeyboardInterrupt:
-            break
-        except Exception as e:
-            print(f"[Main Error] {e}")
-            time.sleep(3)
+    if text.startswith("/start"):
+        send_msg(chat_id, "Привет! Я помогу тебе запустить точку Крутим Тут. Спрашивай про инвестиции, открытие, команду, зарплату, локацию, выручку, маркетинг и другое.")
+    else:
+        resp = answer(text)
+        send_msg(chat_id, resp)
+
+    return "ok"
+
+@app.route("/health", methods=["GET"])
+def health():
+    return "OK"
 
 if __name__ == "__main__":
-    main()
+    print("Bot started (webhook)")
+    app.run(host="0.0.0.0", port=PORT)
