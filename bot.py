@@ -18,17 +18,16 @@ load_dotenv()
 #  НАСТРОЙКИ
 # ═══════════════════════════════════════
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
-GROQ_KEY = os.getenv("GROQ_KEY", "")
+TOGETHER_KEY = os.getenv("TOGETHER_KEY", "")
 
 if not TELEGRAM_TOKEN:
     raise ValueError("❌ Ошибка: не найден TELEGRAM_TOKEN в .env файле!")
 
-# Groq модели (стабильный бесплатный API)
-GROQ_MODELS = [
-    "mixtral-8x7b-32768",
-    "llama-3.1-70b-versatile",
-    "llama-3-70b-8192",
-    "gemma-7b-it",
+# Together.ai модели (стабильный бесплатный API)
+TOGETHER_MODELS = [
+    "meta-llama/Llama-3-70b-chat-hf",
+    "mistralai/Mixtral-8x7B-Instruct-v0.1",
+    "NousResearch/Nous-Hermes-2-Mixtral-8x7B-DPO",
 ]
 
 SYSTEM_PROMPT = KB_PROMPT if KB_PROMPT else """Ты - официальный ассистент Крутим Тут франшизы.
@@ -99,22 +98,22 @@ def send_message(chat_id, text):
         print(f"[Telegram] Ошибка отправки: {e}")
 
 # ═══════════════════════════════════════
-#  AI - GROQ (стабильный бесплатный API)
+#  AI - TOGETHER.AI (стабильный бесплатный API)
 # ═══════════════════════════════════════
 def ask_ai(text):
-    # Если нет Groq ключа - не можем отвечать
-    if not GROQ_KEY:
+    # Если нет Together ключа - не можем отвечать
+    if not TOGETHER_KEY:
         return "Нет доступа к AI сервису. Свяжись с администратором."
 
     headers = {
-        "Authorization": f"Bearer {GROQ_KEY}",
+        "Authorization": f"Bearer {TOGETHER_KEY}",
         "Content-Type": "application/json"
     }
 
-    for model in GROQ_MODELS:
+    for model in TOGETHER_MODELS:
         try:
             r = requests.post(
-                "https://api.groq.com/openai/v1/chat/completions",
+                "https://api.together.xyz/v1/chat/completions",
                 headers=headers,
                 json={
                     "model": model,
