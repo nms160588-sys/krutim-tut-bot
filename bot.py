@@ -18,17 +18,17 @@ load_dotenv()
 #  НАСТРОЙКИ
 # ═══════════════════════════════════════
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
-OPENROUTER_KEY = os.getenv("OPENROUTER_KEY")
+GROQ_KEY = os.getenv("GROQ_KEY", "")
 
-if not TELEGRAM_TOKEN or not OPENROUTER_KEY:
-    raise ValueError("❌ Ошибка: не найдены TELEGRAM_TOKEN или OPENROUTER_KEY в .env файле!")
+if not TELEGRAM_TOKEN:
+    raise ValueError("❌ Ошибка: не найден TELEGRAM_TOKEN в .env файле!")
 
-# Проверенные рабочие модели (ротация при ошибке)
-MODELS = [
-    "z-ai/glm-4.5-air:free",
-    "nvidia/nemotron-3-nano-30b-a3b:free",
-    "google/gemma-4-31b-it:free",
-    "liquid/lfm-2.5-1.2b-thinking:free",
+# Groq модели (стабильный бесплатный API)
+GROQ_MODELS = [
+    "mixtral-8x7b-32768",
+    "llama-3.1-70b-versatile",
+    "llama-3-70b-8192",
+    "gemma-7b-it",
 ]
 
 SYSTEM_PROMPT = KB_PROMPT if KB_PROMPT else """Ты - официальный ассистент Крутим Тут франшизы.
@@ -99,17 +99,22 @@ def send_message(chat_id, text):
         print(f"[Telegram] Ошибка отправки: {e}")
 
 # ═══════════════════════════════════════
-#  AI
+#  AI - GROQ (стабильный бесплатный API)
 # ═══════════════════════════════════════
 def ask_ai(text):
+    # Если нет Groq ключа - не можем отвечать
+    if not GROQ_KEY:
+        return "Нет доступа к AI сервису. Свяжись с администратором."
+
     headers = {
-        "Authorization": f"Bearer {OPENROUTER_KEY}",
+        "Authorization": f"Bearer {GROQ_KEY}",
         "Content-Type": "application/json"
     }
-    for model in MODELS:
+
+    for model in GROQ_MODELS:
         try:
             r = requests.post(
-                "https://openrouter.ai/api/v1/chat/completions",
+                "https://api.groq.com/openai/v1/chat/completions",
                 headers=headers,
                 json={
                     "model": model,
@@ -117,26 +122,28 @@ def ask_ai(text):
                         {"role": "system", "content": SYSTEM_PROMPT},
                         {"role": "user", "content": text}
                     ],
-                    "max_tokens": 500
+                    "max_tokens": 500,
+                    "temperature": 0.7
                 },
                 timeout=30
             )
             data = r.json()
-            if "choices" in data:
+
+            if "choices" in data and len(data["choices"]) > 0:
                 print(f"[AI] Ответила: {model}")
                 response = data["choices"][0]["message"]["content"].strip()
-                # Очищаем ответ от лишних символов
                 return clean_response(response)
 
-            # Если rate limit — ждём и пробуем следующую
-            retry = data.get("error", {}).get("metadata", {}).get("retry_after_seconds", 0)
-            print(f"[AI] {model} — ошибка, пробую следующую...")
-            if retry:
-                time.sleep(min(retry, 5))
+            # Если ошибка - пробуем следующую модель
+            error_msg = data.get("error", {}).get("message", "")
+            print(f"[AI] {model} — ошибка: {error_msg}")
+            time.sleep(1)
+
         except Exception as e:
             print(f"[AI] {model} — исключение: {e}")
+            time.sleep(1)
 
-    return "Сервис временно перегружен. Попробуй через 30 секунд 🙏"
+    return "Сервис временно недоступен. Попробуй через минуту."
 
 # ═══════════════════════════════════════
 #  MAIN LOOP
