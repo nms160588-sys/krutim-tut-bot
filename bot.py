@@ -22,11 +22,13 @@ TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 if not TELEGRAM_TOKEN:
     raise ValueError("❌ Ошибка: не найден TELEGRAM_TOKEN в .env файле!")
 
-# HuggingFace модели (публичный API, без регистрации)
-HF_MODELS = [
-    "mistralai/Mistral-7B-Instruct-v0.1",
-    "meta-llama/Llama-2-7b-chat-hf",
-    "google/flan-t5-large",
+# Replicate API key (бесплатный trial работает без ключа)
+REPLICATE_KEY = os.getenv("REPLICATE_KEY", "")
+
+# Replicate модели (очень быстрые, бесплатные)
+REPLICATE_MODELS = [
+    "meta-llama/llama-2-7b-chat",
+    "mistral-ai/mistral-7b-instruct-v0.2",
 ]
 
 SYSTEM_PROMPT = KB_PROMPT if KB_PROMPT else """Ты - официальный ассистент Крутим Тут франшизы.
@@ -97,43 +99,67 @@ def send_message(chat_id, text):
         print(f"[Telegram] Ошибка отправки: {e}")
 
 # ═══════════════════════════════════════
-#  AI - HUGGINGFACE (публичный API, БЕЗ ключей)
+#  AI - REPLICATE (быстрые бесплатные модели)
 # ═══════════════════════════════════════
 def ask_ai(text):
-    for model in HF_MODELS:
+    for model in REPLICATE_MODELS:
         try:
+            headers = {"Content-Type": "application/json"}
+            if REPLICATE_KEY:
+                headers["Authorization"] = f"Token {REPLICATE_KEY}"
+
+            prompt = f"{SYSTEM_PROMPT}\n\nПользователь: {text}\n\nОтвет:"
+
             r = requests.post(
-                f"https://api-inference.huggingface.co/models/{model}",
-                headers={"Content-Type": "application/json"},
+                "https://api.replicate.com/v1/predictions",
+                headers=headers,
                 json={
-                    "inputs": f"{SYSTEM_PROMPT}\n\nПользователь: {text}\n\nОтвет:",
-                    "parameters": {
-                        "max_new_tokens": 500,
+                    "version": model,
+                    "input": {
+                        "prompt": prompt,
+                        "max_tokens": 500,
                         "temperature": 0.7
                     }
                 },
-                timeout=30
+                timeout=60
             )
-            data = r.json()
 
-            # Проверяем ответ
-            if isinstance(data, list) and len(data) > 0:
-                response = data[0].get("generated_text", "").strip()
-                if response and len(response) > 20:
-                    print(f"[AI] Ответила: {model}")
-                    # Убираем дублирование системного промпта и пользователя
-                    if "Ответ:" in response:
-                        response = response.split("Ответ:")[-1].strip()
-                    return clean_response(response)
+            if r.status_code == 201:
+                data = r.json()
+                prediction_id = data.get("id")
+
+                # Ждем результата (макс 30 секунд)
+                for _ in range(30):
+                    time.sleep(1)
+                    result = requests.get(
+                        f"https://api.replicate.com/v1/predictions/{prediction_id}",
+                        headers=headers,
+                        timeout=10
+                    ).json()
+
+                    if result.get("status") == "succeeded":
+                        output = result.get("output", [])
+                        if output:
+                            response = "".join(output).strip()
+                            if response and len(response) > 20:
+                                print(f"[AI] Ответила: {model}")
+                                # Очищаем от дублирования
+                                if "Ответ:" in response:
+                                    response = response.split("Ответ:")[-1].strip()
+                                return clean_response(response)
+
+                    elif result.get("status") == "failed":
+                        print(f"[AI] {model} — ошибка обработки")
+                        break
 
             print(f"[AI] {model} — нет ответа, пробую следующую...")
-            time.sleep(2)
+            time.sleep(1)
 
         except Exception as e:
-            print(f"[AI] {model} — ошибка: {e}")
-            time.sleep(2)
+            print(f"[AI] {model} — исключение: {e}")
+            time.sleep(1)
 
-    return "Сервис загружается. Попробуй через минуту."
+    return "Сервис недоступен. Попробуй через минуту."
 
 # ═══════════════════════════════════════
 #  MAIN LOOP
