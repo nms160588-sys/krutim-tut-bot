@@ -1,90 +1,63 @@
-from flask import Flask, request, jsonify
+#!/usr/bin/env python3
 import requests
+import time
 import os
-from dotenv import load_dotenv
 
-load_dotenv()
-
-TOKEN = os.getenv("TELEGRAM_TOKEN")
-PORT = int(os.getenv("PORT", 5000))
-
-if not TOKEN:
-    print("ERROR: No TELEGRAM_TOKEN")
-    exit(1)
-
-app = Flask(__name__)
+TOKEN = os.getenv("TELEGRAM_TOKEN", "8593390180:AAGuynAuduO4KThU05oyL9KbER1K7xh1bHQ")
 
 ANSWERS = {
-    "инвест": "300-500 тысяч на старте. Помещение, ремонт, оборудование, товары. Окупаешься за 3-4 месяца если хорошая локация.",
-    "открыт": "Этапы: помещение, ремонт, оборудование, найм, обучение, открытие. Минимум месяц подготовки.",
-    "команд": "3-4 человека. Менеджер, кассиры. Зарплата 200р/час + бонусы от выручки.",
-    "зарплат": "200р/час = 2400р за смену. Бонусы: 5% сверх 20к, 7% сверх 30к, 10% сверх 40к выручки.",
-    "локац": "Трафик минимум 500 чел/час пики. Метро, ТЦ, офисные районы. Проверь парковку и видимость.",
-    "выручк": "Месяц 1: убыток. Месяцы 2-3: 150-200к. Месяц 4: 300+ тысяч выручки.",
-    "маркетинг": "ТикТок видео, Инстаграм мемы, отзывы на 2ГИС и Яндекс. День рождения месяца - скидка 50%.",
-    "чек": "Поднимай средний чек допродажами: сыр, доп ингредиенты, напитки. Комбо со скидкой 15%.",
-    "": "Привет! Спрашивай про франшизу. Помогу с инвестициями, открытием, командой, маркетингом и всем остальным.",
+    "инвест": "300-500 тысяч на старте",
+    "открыт": "Помещение, ремонт, оборудование, найм, обучение, открытие",
+    "команд": "3-4 человека. Менеджер, кассиры",
+    "зарплат": "200р/час + бонусы от выручки",
+    "локац": "Минимум 500 чел/час пики. Метро хорошо",
+    "выручк": "Месяц 1: убыток. Месяц 4: 300+ тысяч",
+    "маркетинг": "ТикТок, Инстаграм, 2ГИС отзывы",
+    "чек": "Допродажи: сыр, ингредиенты, напитки",
 }
 
 def send_msg(chat_id, text):
-    try:
-        requests.post(
-            f"https://api.telegram.org/bot{TOKEN}/sendMessage",
-            json={"chat_id": chat_id, "text": text}
-        )
-        print(f"[OK] Отправлено {chat_id}")
-    except Exception as e:
-        print(f"[ERROR] {e}")
+    requests.post(
+        f"https://api.telegram.org/bot{TOKEN}/sendMessage",
+        json={"chat_id": chat_id, "text": text},
+        timeout=5
+    )
 
 def answer(text):
-    text_low = text.lower()
     for key, resp in ANSWERS.items():
-        if key and key in text_low:
-            print(f"[ANSWER] Найден ключ: {key}")
+        if key in text.lower():
             return resp
-    print(f"[ANSWER] Возвращаю default")
-    return ANSWERS[""]
+    return "Привет! Спрашивай про инвестиции, открытие, команду, маркетинг и другое"
 
-@app.route("/", methods=["GET"])
-def get():
-    return "OK", 200
+offset = None
+print("Bot started")
 
-@app.route("/", methods=["POST"])
-def webhook():
+while True:
     try:
-        data = request.get_json()
-        print(f"[UPDATE] {data}")
+        r = requests.get(
+            f"https://api.telegram.org/bot{TOKEN}/getUpdates",
+            params={"timeout": 20, "offset": offset},
+            timeout=25
+        )
+        data = r.json()
 
-        if not data or "message" not in data:
-            print("[SKIP] Нет message в data")
-            return "ok", 200
+        if not data.get("ok"):
+            time.sleep(1)
+            continue
 
-        msg = data["message"]
-        chat_id = msg.get("chat", {}).get("id")
-        text = msg.get("text", "")
+        for upd in data.get("result", []):
+            offset = upd["update_id"] + 1
+            msg = upd.get("message", {})
+            chat_id = msg.get("chat", {}).get("id")
+            text = msg.get("text", "")
 
-        if not chat_id or not text:
-            print(f"[SKIP] chat_id={chat_id}, text={text}")
-            return "ok", 200
-
-        print(f"[MSG] {chat_id}: {text}")
-
-        if text.startswith("/start"):
-            send_msg(chat_id, "Привет! Я помогу тебе запустить точку Крутим Тут. Спрашивай про инвестиции, открытие, команду, зарплату, локацию, выручку, маркетинг и другое.")
-        else:
-            resp = answer(text)
-            send_msg(chat_id, resp)
-
-        return "ok", 200
+            if chat_id and text:
+                print(f"Got: {text}")
+                if text.startswith("/start"):
+                    send_msg(chat_id, "Привет! Помогу с франшизой Крутим Тут")
+                else:
+                    send_msg(chat_id, answer(text))
 
     except Exception as e:
-        print(f"[ERROR] {e}")
-        return "error", 500
-
-@app.route("/health", methods=["GET"])
-def health():
-    return "OK", 200
-
-if __name__ == "__main__":
-    print(f"Starting bot on port {PORT}")
-    app.run(host="0.0.0.0", port=PORT, debug=False)
+        print(f"Error: {e}")
+        time.sleep(3)
