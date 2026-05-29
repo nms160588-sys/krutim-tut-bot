@@ -18,16 +18,15 @@ load_dotenv()
 #  НАСТРОЙКИ
 # ═══════════════════════════════════════
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
-TOGETHER_KEY = os.getenv("TOGETHER_KEY", "")
 
 if not TELEGRAM_TOKEN:
     raise ValueError("❌ Ошибка: не найден TELEGRAM_TOKEN в .env файле!")
 
-# Together.ai модели (стабильный бесплатный API)
-TOGETHER_MODELS = [
-    "meta-llama/Llama-3-70b-chat-hf",
-    "mistralai/Mixtral-8x7B-Instruct-v0.1",
-    "NousResearch/Nous-Hermes-2-Mixtral-8x7B-DPO",
+# HuggingFace модели (публичный API, без регистрации)
+HF_MODELS = [
+    "mistralai/Mistral-7B-Instruct-v0.1",
+    "meta-llama/Llama-2-7b-chat-hf",
+    "google/flan-t5-large",
 ]
 
 SYSTEM_PROMPT = KB_PROMPT if KB_PROMPT else """Ты - официальный ассистент Крутим Тут франшизы.
@@ -98,51 +97,43 @@ def send_message(chat_id, text):
         print(f"[Telegram] Ошибка отправки: {e}")
 
 # ═══════════════════════════════════════
-#  AI - TOGETHER.AI (стабильный бесплатный API)
+#  AI - HUGGINGFACE (публичный API, БЕЗ ключей)
 # ═══════════════════════════════════════
 def ask_ai(text):
-    # Если нет Together ключа - не можем отвечать
-    if not TOGETHER_KEY:
-        return "Нет доступа к AI сервису. Свяжись с администратором."
-
-    headers = {
-        "Authorization": f"Bearer {TOGETHER_KEY}",
-        "Content-Type": "application/json"
-    }
-
-    for model in TOGETHER_MODELS:
+    for model in HF_MODELS:
         try:
             r = requests.post(
-                "https://api.together.xyz/v1/chat/completions",
-                headers=headers,
+                f"https://api-inference.huggingface.co/models/{model}",
+                headers={"Content-Type": "application/json"},
                 json={
-                    "model": model,
-                    "messages": [
-                        {"role": "system", "content": SYSTEM_PROMPT},
-                        {"role": "user", "content": text}
-                    ],
-                    "max_tokens": 500,
-                    "temperature": 0.7
+                    "inputs": f"{SYSTEM_PROMPT}\n\nПользователь: {text}\n\nОтвет:",
+                    "parameters": {
+                        "max_new_tokens": 500,
+                        "temperature": 0.7
+                    }
                 },
                 timeout=30
             )
             data = r.json()
 
-            if "choices" in data and len(data["choices"]) > 0:
-                print(f"[AI] Ответила: {model}")
-                response = data["choices"][0]["message"]["content"].strip()
-                return clean_response(response)
+            # Проверяем ответ
+            if isinstance(data, list) and len(data) > 0:
+                response = data[0].get("generated_text", "").strip()
+                if response and len(response) > 20:
+                    print(f"[AI] Ответила: {model}")
+                    # Убираем дублирование системного промпта и пользователя
+                    if "Ответ:" in response:
+                        response = response.split("Ответ:")[-1].strip()
+                    return clean_response(response)
 
-            # Если ошибка - пробуем следующую модель
-            error_msg = data.get("error", {}).get("message", "")
-            print(f"[AI] {model} — ошибка: {error_msg}")
-            time.sleep(1)
+            print(f"[AI] {model} — нет ответа, пробую следующую...")
+            time.sleep(2)
 
         except Exception as e:
-            print(f"[AI] {model} — исключение: {e}")
-            time.sleep(1)
+            print(f"[AI] {model} — ошибка: {e}")
+            time.sleep(2)
 
-    return "Сервис временно недоступен. Попробуй через минуту."
+    return "Сервис загружается. Попробуй через минуту."
 
 # ═══════════════════════════════════════
 #  MAIN LOOP
