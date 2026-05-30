@@ -43,3 +43,5 @@ partners.json
 partners.json.tmp
 server.log
 bot.log
+tunnel.log
+supervisor.log
