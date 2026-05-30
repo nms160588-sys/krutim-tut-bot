@@ -45,3 +45,4 @@ server.log
 bot.log
 tunnel.log
 supervisor.log
+bin/
