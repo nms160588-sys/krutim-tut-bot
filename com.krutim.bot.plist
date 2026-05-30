@@ -6,6 +6,8 @@
     <string>com.krutim.bot</string>
     <key>ProgramArguments</key>
     <array>
+        <string>/usr/bin/caffeinate</string>
+        <string>-dimsu</string>
         <string>/usr/local/bin/python3</string>
         <string>/Users/maksim/Desktop/krutim-tut-bot/supervisor.py</string>
     </array>
