@@ -2,6 +2,9 @@
 # Webhook-версия бота. Принимает апдейты от Telegram через cloudflared-туннель.
 import os
 import re
+import json
+import time
+import threading
 import requests
 from flask import Flask, request
 
@@ -67,6 +70,113 @@ CHECKLISTS = {
 progress = {}
 done_notified = set()
 
+# ── Карточка партнёра, напоминания, отчёт для Виктории ───────────
+PARTNERS_FILE = os.path.join(os.path.dirname(__file__), "partners.json")
+ADMIN_SECRET = "krутим2026"          # слово для доступа к отчёту
+REMINDER_DELAY = 24 * 3600           # через сколько секунд напомнить о незавершённом чек-листе
+CHECKLIST_NAMES = {"loc": "локация", "hire": "найм персонала", "open": "подготовка к открытию"}
+_plock = threading.Lock()
+
+def _load():
+    try:
+        with open(PARTNERS_FILE, encoding="utf-8") as f:
+            return json.load(f)
+    except (FileNotFoundError, ValueError):
+        return {"_admins": []}
+
+def _save(data):
+    tmp = PARTNERS_FILE + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=1)
+    os.replace(tmp, PARTNERS_FILE)
+
+DB = _load()
+
+def partner(cid):
+    k = str(cid)
+    if k not in DB:
+        DB[k] = {"chat_id": cid, "name": "", "city": "", "first_seen": time.time(),
+                 "last_seen": time.time(), "stage": "знакомство", "checklists": {}, "reminders": []}
+    return DB[k]
+
+def stage_by_progress(p):
+    cl = p.get("checklists", {})
+    full = lambda key, n: len(cl.get(key, [])) >= n
+    if full("open", len(CHECKLISTS["open"]["items"])):
+        return "готов к открытию"
+    if full("hire", len(CHECKLISTS["hire"]["items"])):
+        return "найм персонала"
+    if full("loc", len(CHECKLISTS["loc"]["items"])):
+        return "локация выбрана"
+    if cl:
+        return "запуск идёт"
+    return "знакомство"
+
+def capture_name_city(p, text):
+    m = re.search(r"меня зовут\s+([А-ЯЁ][а-яё]+)", text, re.IGNORECASE)
+    if m and not p.get("name"):
+        p["name"] = m.group(1).capitalize()
+    m = re.search(r"(?:я из|город|города|г\.)\s+([А-ЯЁ][а-яё-]{2,})", text, re.IGNORECASE)
+    if m and not p.get("city"):
+        p["city"] = m.group(1).capitalize()
+
+def add_reminder(cid, key):
+    p = partner(cid)
+    if any(r.get("key") == key and not r.get("sent") for r in p["reminders"]):
+        return
+    p["reminders"].append({"key": key, "due": time.time() + REMINDER_DELAY, "sent": False})
+
+def cancel_reminder(cid, key):
+    for r in partner(cid).get("reminders", []):
+        if r.get("key") == key:
+            r["sent"] = True
+
+def reminder_loop():
+    while True:
+        try:
+            now = time.time()
+            with _plock:
+                changed = False
+                for k, p in list(DB.items()):
+                    if k == "_admins":
+                        continue
+                    for r in p.get("reminders", []):
+                        if not r.get("sent") and r.get("due", 0) <= now:
+                            name = CHECKLIST_NAMES.get(r["key"], r["key"])
+                            send_msg(p["chat_id"], f"Как продвигается по теме {name}? Что уже сделал, что осталось?")
+                            r["sent"] = True
+                            changed = True
+                if changed:
+                    _save(DB)
+        except Exception as e:
+            print(f"[reminder err] {e}", flush=True)
+        time.sleep(60)
+
+def svodka_text():
+    lines = ["Сводка по партнёрам:"]
+    n = 0
+    for k, p in DB.items():
+        if k == "_admins":
+            continue
+        n += 1
+        cl = p.get("checklists", {})
+        prog = ", ".join(f"{CHECKLIST_NAMES.get(key, key)} {len(v)}/{len(CHECKLISTS[key]['items'])}"
+                         for key, v in cl.items()) or "чек-листы не начаты"
+        who = p.get("name") or "без имени"
+        city = p.get("city") or "город не указан"
+        days = int((time.time() - p.get("last_seen", time.time())) / 86400)
+        lines.append(f"{n}. {who}, {city} — этап: {p.get('stage','-')}. {prog}. Последний контакт: {days} дн назад")
+    if n == 0:
+        lines.append("пока никого нет")
+    return "\n".join(lines)
+
+_reminder_started = False
+def start_reminders():
+    global _reminder_started
+    if not _reminder_started:
+        _reminder_started = True
+        threading.Thread(target=reminder_loop, daemon=True).start()
+
 def build_keyboard(chat_id, key):
     items = CHECKLISTS[key]["items"]
     done = progress.get((chat_id, key), set())
@@ -78,6 +188,12 @@ def send_msg(chat_id, text):
 
 def send_checklist(chat_id, key):
     progress.setdefault((chat_id, key), set())
+    with _plock:
+        p = partner(chat_id)
+        p["checklists"].setdefault(key, [])
+        p["stage"] = stage_by_progress(p)
+        add_reminder(chat_id, key)
+        _save(DB)
     requests.post(f"{API}/sendMessage", json={"chat_id": chat_id, "text": CHECKLISTS[key]["title"],
                   "reply_markup": build_keyboard(chat_id, key)}, timeout=10)
 
@@ -94,6 +210,15 @@ def handle_callback(cq):
     requests.post(f"{API}/editMessageReplyMarkup", json={"chat_id": chat_id, "message_id": msg_id,
                   "reply_markup": build_keyboard(chat_id, key)}, timeout=10)
     requests.post(f"{API}/answerCallbackQuery", json={"callback_query_id": cq["id"]}, timeout=10)
+    # обновляем карточку партнёра
+    with _plock:
+        p = partner(chat_id)
+        p["checklists"][key] = sorted(s)
+        p["stage"] = stage_by_progress(p)
+        p["last_seen"] = time.time()
+        if len(s) == len(CHECKLISTS[key]["items"]):
+            cancel_reminder(chat_id, key)
+        _save(DB)
     if len(s) == len(CHECKLISTS[key]["items"]) and (chat_id, key) not in done_notified:
         done_notified.add((chat_id, key)); send_msg(chat_id, CHECKLISTS[key]["done"])
 
@@ -197,6 +322,35 @@ def process_update(u):
     if not cid or not txt:
         return
     print(f"[MSG] {cid}: {txt}", flush=True)
+
+    # карточка партнёра: фиксируем контакт, имя, город
+    with _plock:
+        p = partner(cid)
+        p["last_seen"] = time.time()
+        capture_name_city(p, txt)
+        p["stage"] = stage_by_progress(p)
+        _save(DB)
+
+    low = txt.lower().strip()
+
+    # доступ к отчёту для Виктории
+    if low.startswith("/admin"):
+        if ADMIN_SECRET.lower() in low:
+            with _plock:
+                if cid not in DB["_admins"]:
+                    DB["_admins"].append(cid)
+                _save(DB)
+            send_msg(cid, "Доступ открыт. Команда /svodka покажет всех партнёров и их этапы.")
+        else:
+            send_msg(cid, "Неверное слово доступа.")
+        return
+    if low.startswith("/svodka") or low in ("сводка", "отчёт", "отчет"):
+        if cid in DB.get("_admins", []):
+            send_msg(cid, svodka_text())
+        else:
+            route(cid, txt)
+        return
+
     if txt.startswith("/start"):
         if cid not in greeted:
             greeted.add(cid)
@@ -217,6 +371,8 @@ def hook():
 @app.route("/", methods=["GET"])
 def health():
     return "OK"
+
+start_reminders()  # фоновый поток напоминаний
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=8080)
