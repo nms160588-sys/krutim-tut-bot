@@ -19,6 +19,11 @@ API = server.API
 
 def main():
     offset = None
+    # снимаем webhook, если был — иначе getUpdates не работает (переключаемся на поллинг)
+    try:
+        requests.post(f"{API}/deleteWebhook", json={"drop_pending_updates": False}, timeout=10)
+    except Exception:
+        pass
     print("Bot started (polling)", flush=True)
     while True:
         try:

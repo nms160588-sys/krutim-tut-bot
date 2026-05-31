@@ -6,7 +6,11 @@ import json
 import time
 import threading
 import requests
-from flask import Flask, request
+try:
+    from flask import Flask, request
+    _HAS_FLASK = True
+except ImportError:  # для polling-режима Flask не нужен
+    _HAS_FLASK = False
 
 def load_env():
     try:
@@ -61,7 +65,7 @@ PLAN_PHOTOS = [
     ("p13.png", "С посадкой — спецификация отделки"),
 ]
 
-app = Flask(__name__)
+app = Flask(__name__) if _HAS_FLASK else None
 
 SYSTEM_PROMPT = """Ты справочник отдела запуска и сопровождения сети шаурмы Крутим Тут.
 Партнёр УЖЕ КУПИЛ франшизу. Ничего не продаёшь, про бюджет не спрашиваешь.
@@ -579,16 +583,17 @@ def process_update(u):
         greeted.add(cid)
         route(cid, txt)
 
-@app.route(HOOK_PATH, methods=["POST"])
-def hook():
-    process_update(request.get_json(silent=True) or {})
-    return "ok"
+if _HAS_FLASK:
+    @app.route(HOOK_PATH, methods=["POST"])
+    def hook():
+        process_update(request.get_json(silent=True) or {})
+        return "ok"
 
-@app.route("/", methods=["GET"])
-def health():
-    return "OK"
+    @app.route("/", methods=["GET"])
+    def health():
+        return "OK"
 
 start_reminders()  # фоновый поток напоминаний
 
-if __name__ == "__main__":
+if __name__ == "__main__" and _HAS_FLASK:
     app.run(host="0.0.0.0", port=8080, threaded=True)
